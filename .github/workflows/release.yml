@@ -1,0 +1,124 @@
+name: release
+
+# A tag arrives here together with the release commit it points at. This
+# builds the four gems from that tag, creates the GitHub Release, and pushes
+# the gems to rubygems.org.
+#
+# The gems are platform-independent: each backend's native extension is
+# compiled by its extconf.rb at install time, and extconf.rb writes a no-op
+# Makefile when the toolchain is missing, so installation never fails.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re-)release (e.g. v0.18.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: tag
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: core
+      - name: Run the core test suite
+        working-directory: core
+        run: bundle exec rake test
+      - name: Check the tag matches the gem version
+        run: |
+          version="$(ruby -r ./core/lib/tilework/version -e 'print Tilework::VERSION')"
+          test "v$version" = "${{ steps.tag.outputs.tag }}"
+      - name: Build gems
+        run: |
+          mkdir -p gems
+          for dir in core metal cuda hip; do
+            (cd "$dir" && gem build ./*.gemspec && mv ./*.gem ../gems/)
+          done
+      - name: Extract release notes
+        run: |
+          version="${{ steps.tag.outputs.tag }}"
+          awk -v v="${version#v}" '
+            /^## / { printing = ($2 == v) ; next }
+            printing { print }
+          ' CHANGELOG.md > notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            gems/*.gem
+            notes.md
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            gh release upload "$TAG" gems/*.gem --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" gems/*.gem --title "$TAG" --notes-file notes.md \
+              --verify-tag --repo "${{ github.repository }}"
+          fi
+
+  rubygems:
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted publishing: rubygems.org exchanges this job's OIDC token for a
+    # short-lived API key, so no long-lived secret is stored here. Each of the
+    # four gems needs this repository + workflow (release.yml) + environment
+    # (rubygems) registered as a trusted publisher on rubygems.org.
+    environment: rubygems
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - uses: rubygems/configure-rubygems-credentials@v2.1.0
+      - name: Push gems
+        # Core first: the backend gems depend on it. A version that is already
+        # on rubygems.org is skipped, so a re-run after a partial failure
+        # finishes the job instead of stopping at the first gem.
+        run: |
+          push() {
+            name="${1%-*}"; name="${name##*/}"
+            version="${1##*-}"; version="${version%.gem}"
+            if curl -sf -o /dev/null "https://rubygems.org/api/v2/rubygems/$name/versions/$version.json"; then
+              echo "$name $version is already published"
+            else
+              gem push "$1"
+            fi
+          }
+          push gems/tilework-[0-9]*.gem
+          for gem in gems/tilework-metal-*.gem gems/tilework-cuda-*.gem gems/tilework-hip-*.gem; do
+            push "$gem"
+          done

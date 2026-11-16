@@ -1,0 +1,51 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+require "rbconfig"
+
+EXT_DIR = "ext/tilework/cuda"
+DLEXT = RbConfig::CONFIG["DLEXT"] # linux: "so"
+EXT_LIB = "#{EXT_DIR}/bridge.#{DLEXT}"
+INSTALLED_EXT = "lib/tilework/cuda/bridge.#{DLEXT}"
+
+desc "Build the native CUDA bridge extension (no-op without a CUDA toolchain, see extconf.rb)"
+task :compile do
+  Dir.chdir(EXT_DIR) do
+    ruby "extconf.rb"
+    sh "make"
+  end
+  # Without a CUDA Toolkit extconf.rb writes a no-op Makefile, so a missing
+  # build product is not an error by itself.
+  if File.exist?(EXT_LIB)
+    mkdir_p File.dirname(INSTALLED_EXT)
+    cp EXT_LIB, INSTALLED_EXT
+  else
+    puts "no extension built (see the extconf.rb message above)"
+  end
+end
+
+desc "Remove build artifacts"
+task :clean do
+  Dir.chdir(EXT_DIR) { sh "make clean" if File.exist?("Makefile") }
+  rm_f [INSTALLED_EXT, "#{EXT_DIR}/Makefile"]
+end
+
+Rake::TestTask.new(:test) do |t|
+  t.libs << "test"
+  t.test_files = FileList["test/**/*_test.rb"]
+  t.warning = false
+end
+
+desc "Run the CUDA backend as the real backend under test (requires an NVIDIA GPU + CUDA Toolkit; builds the extension first)"
+task "test:cuda" => :compile do
+  ENV["GPU_TESTS"] = "1"
+  ENV["GPU_BACKEND"] = "cuda"
+  Rake::Task[:test].invoke
+end
+
+task default: "test:cuda"
+
+desc "Generate the YARD API reference"
+task :yard do
+  sh "yard", "doc", "lib/tilework/backend/cuda.rb"
+end

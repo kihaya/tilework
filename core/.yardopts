@@ -1,0 +1,6 @@
+--title Tilework API Reference
+--output-dir doc
+--markup markdown
+--protected
+lib/tilework.rb
+lib/tilework/**/*.rb

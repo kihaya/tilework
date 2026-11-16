@@ -1,0 +1,40 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+
+# test/tilework: per-behavior unit tests (one file per class/module).
+# test/e2e:      whole workflows chaining several Ops/NN/DSL calls
+#                (ml, use_cases, offload, random). Numerical correctness is
+#                Tilework::Conformance's job (test/tilework/conformance_test.rb),
+#                so these only check that the workflow runs end to end.
+Rake::TestTask.new(:test) do |t|
+  t.libs << "test" << "lib"
+  t.test_files = FileList["test/**/*_test.rb"]
+  t.warning = false
+end
+
+Rake::TestTask.new("test:unit") do |t|
+  t.libs << "test" << "lib"
+  t.test_files = FileList["test/tilework/**/*_test.rb"]
+  t.warning = false
+end
+
+Rake::TestTask.new("test:e2e") do |t|
+  t.libs << "test" << "lib"
+  t.test_files = FileList["test/e2e/**/*_test.rb"]
+  t.warning = false
+end
+
+desc "Run the CPU backend as the real backend under test (same suite, Tilework.backend = :cpu)"
+task "test:cpu" do
+  ENV["GPU_TESTS"] = "1"
+  ENV["GPU_BACKEND"] = "cpu"
+  Rake::Task[:test].invoke
+end
+
+task default: :test
+
+desc "Generate the YARD API reference"
+task :yard do
+  sh "yard", "doc"
+end

@@ -1,0 +1,39 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+require "rbconfig"
+
+EXT_DIR = "ext/tilework/hip"
+DLEXT = RbConfig::CONFIG["DLEXT"]
+EXT_LIB = "#{EXT_DIR}/bridge.#{DLEXT}"
+INSTALLED_EXT = "lib/tilework/hip/bridge.#{DLEXT}"
+
+desc "Build the native HIP bridge extension (no-op without ROCm; set ROCM_HOME)"
+task :compile do
+  Dir.chdir(EXT_DIR) { ruby "extconf.rb"; sh "make" }
+  if File.exist?(EXT_LIB)
+    mkdir_p File.dirname(INSTALLED_EXT)
+    cp EXT_LIB, INSTALLED_EXT
+  else
+    puts "no extension built (set ROCM_HOME to a ROCm installation)"
+  end
+end
+
+task :clean do
+  Dir.chdir(EXT_DIR) { sh "make clean" if File.exist?("Makefile") }
+  rm_f [INSTALLED_EXT, "#{EXT_DIR}/Makefile"]
+end
+
+Rake::TestTask.new(:test) do |t|
+  t.libs << "test"
+  t.test_files = FileList["test/**/*_test.rb"]
+  t.warning = false
+end
+
+task "test:hip" => :compile do
+  ENV["GPU_TESTS"] = "1"
+  ENV["GPU_BACKEND"] = "hip"
+  Rake::Task[:test].invoke
+end
+
+task default: "test:hip"

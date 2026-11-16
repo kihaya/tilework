@@ -1,0 +1,51 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+require "rbconfig"
+
+EXT_DIR = "ext/tilework/metal"
+DLEXT = RbConfig::CONFIG["DLEXT"] # darwin: "bundle"
+EXT_LIB = "#{EXT_DIR}/bridge.#{DLEXT}"
+INSTALLED_EXT = "lib/tilework/metal/bridge.#{DLEXT}"
+
+desc "Build the native Metal bridge extension (no-op off macOS, see extconf.rb)"
+task :compile do
+  Dir.chdir(EXT_DIR) do
+    ruby "extconf.rb"
+    sh "make"
+  end
+  # Off macOS extconf.rb writes a no-op Makefile, so a missing build product
+  # is not an error by itself.
+  if File.exist?(EXT_LIB)
+    mkdir_p File.dirname(INSTALLED_EXT)
+    cp EXT_LIB, INSTALLED_EXT
+  else
+    puts "no extension built (see the extconf.rb message above)"
+  end
+end
+
+desc "Remove build artifacts"
+task :clean do
+  Dir.chdir(EXT_DIR) { sh "make clean" if File.exist?("Makefile") }
+  rm_f [INSTALLED_EXT, "#{EXT_DIR}/Makefile"]
+end
+
+Rake::TestTask.new(:test) do |t|
+  t.libs << "test"
+  t.test_files = FileList["test/**/*_test.rb"]
+  t.warning = false
+end
+
+desc "Run the Metal backend as the real backend under test (requires Apple Silicon; builds the extension first)"
+task "test:metal" => :compile do
+  ENV["GPU_TESTS"] = "1"
+  ENV["GPU_BACKEND"] = "metal"
+  Rake::Task[:test].invoke
+end
+
+task default: "test:metal"
+
+desc "Generate the YARD API reference"
+task :yard do
+  sh "yard", "doc", "lib/tilework/backend/metal.rb"
+end
