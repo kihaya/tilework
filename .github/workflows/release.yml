@@ -103,7 +103,35 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
-      - uses: rubygems/configure-rubygems-credentials@v2.1.0
+      - name: Configure RubyGems credentials
+        if: vars.RUBYGEMS_OWNER == ''
+        uses: rubygems/configure-rubygems-credentials@v2.1.0
+      - name: Configure RubyGems credentials (creating a gem)
+        # rubygems.org lets a trusted publisher create a gem that does not
+        # exist yet only when the token exchange names the account that will
+        # own it, and the action above has no input for that. Set the
+        # RUBYGEMS_OWNER repository variable to that account's ID (shown on its
+        # Pending Trusted Publishers page) for the first push of a new gem,
+        # and delete it afterwards.
+        if: vars.RUBYGEMS_OWNER != ''
+        env:
+          OWNER: ${{ vars.RUBYGEMS_OWNER }}
+        run: |
+          jwt="$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=rubygems.org" |
+            ruby -rjson -e 'print JSON.parse($stdin.read).fetch("value")')"
+          echo "::add-mask::$jwt"
+          body="$(ruby -rjson -e 'print JSON.generate(jwt: ARGV[0], owner: ARGV[1])' "$jwt" "$OWNER")"
+          response="$(curl -sS -X POST -H "Content-Type: application/json" -d "$body" \
+            https://rubygems.org/api/v1/oidc/trusted_publisher/exchange_token)"
+          key="$(printf '%s' "$response" |
+            ruby -rjson -e 'print((JSON.parse($stdin.read)["rubygems_api_key"] rescue nil).to_s)')"
+          if [ -z "$key" ]; then
+            echo "::error::token exchange failed: $response"
+            exit 1
+          fi
+          echo "::add-mask::$key"
+          echo "GEM_HOST_API_KEY=$key" >> "$GITHUB_ENV"
       - name: Push gems
         # Core first: the backend gems depend on it. A version that is already
         # on rubygems.org is skipped, so a re-run after a partial failure
